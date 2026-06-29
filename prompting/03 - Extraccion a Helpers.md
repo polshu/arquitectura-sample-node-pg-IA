@@ -32,11 +32,30 @@ try {
 }
 ```
 
-Está en **cada uno de los 5 endpoints**, y otra vez en `cursos-controller.js`. Candidatos a helper:
+Está en **cada uno de los 5 endpoints**, y otra vez en `cursos-controller.js` (y en `materias-controller.js`, si lo creaste en el ejercicio 01). Candidatos a helper:
 
 - Un wrapper de manejo de errores async (que evite el try/catch en cada endpoint).
 - Un helper de respuestas (`responderOk`, `responderNotFound`, `responderError`) para unificar el formato.
 - Sacar `calcularEdad` / `agregarEdad` de `alumnos-service.js` a un helper de fechas reutilizable.
+
+---
+
+## 🔧 La idea: extraer lo repetido a un método
+
+Volvé a mirar el bloque de arriba. Fijate que pedazos como este aparecen **igual** en endpoint tras endpoint, en alumnos, en cursos, en materias:
+
+```js
+res.status(StatusCodes.NOT_FOUND).send(`No se encontro...`);
+```
+
+**Extraer a un helper** es exactamente eso: agarrar ese pedacito que se repite y ponerlo en **una función con nombre** (algo del estilo `responderNotFound(res, mensaje)`) que viva en `src/helpers/`. Después, en cada endpoint, en vez de escribir el `res.status(...).send(...)` a mano, **llamás a esa función**.
+
+Si lo hacés bien, deberías lograr que:
+
+- el endpoint quede **más corto** y más fácil de leer, y
+- el "qué status code corresponde a cada caso" quede en **un solo lugar** (el helper), no copiado por todos lados.
+
+> 🧩 **Cómo lo implementás exactamente —qué funciones creás, cómo se llaman, qué reciben y devuelven— lo resolvés vos con la IA.** Esa es la parte del ejercicio. Acá solo te marcamos *qué* problema atacar, no *cómo* resolverlo.
 
 ---
 
@@ -71,7 +90,7 @@ Está en **cada uno de los 5 endpoints**, y otra vez en `cursos-controller.js`. 
 - [ ] Cada endpoint que usa el helper quedó **más corto** y se lee mejor.
 - [ ] Los **status codes no cambiaron**: probá happy path **y** casos de error (404, 400) en Postman.
 - [ ] Si extrajiste `calcularEdad`, el cálculo de edad de los alumnos sigue dando el mismo número.
-- [ ] El helper no quedó "atado" a una entidad puntual (es reutilizable por `cursos`, `profesores`, etc.).
+- [ ] El helper no quedó "atado" a una entidad puntual (es reutilizable por `cursos`, `materias`, etc.).
 
 > 🤔 Pregunta para el oral: *¿un helper de respuestas debería conocer los status codes, o se los deberías pasar el controller? ¿Por qué? ¿Dónde "vive" la decisión de devolver 404?*
 
