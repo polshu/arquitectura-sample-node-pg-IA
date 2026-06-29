@@ -1,0 +1,10 @@
+2026-06-29T12:33:11.562Z: error - relation "cursoss" does not exist
+Stack Trace:
+error: relation "cursoss" does not exist
+    at D:\GITProyectos\polshu\arquitectura-sample-node-pg-IA\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async DbPg.queryAll (file:///D:/GITProyectos/polshu/arquitectura-sample-node-pg-IA/src/repositories/db-pg.js:24:19)
+    at async CursosRepository.getAllAsync (file:///D:/GITProyectos/polshu/arquitectura-sample-node-pg-IA/src/repositories/cursos-repository.js:12:16)
+    at async CursosService.getAllAsync (file:///D:/GITProyectos/polshu/arquitectura-sample-node-pg-IA/src/services/cursos-service.js:11:29)
+    at async file:///D:/GITProyectos/polshu/arquitectura-sample-node-pg-IA/src/controllers/cursos-controller.js:11:29
+

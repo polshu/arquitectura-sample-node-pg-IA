@@ -1,10 +1,11 @@
-# Server con Capas — Arquitectura Controller → Service → Repository
+# Arquitectura en capas — Controller → Service → Repository → DbPg
 
 > **Archivos**: `src/server.js` + `src/controllers/` + `src/services/` + `src/repositories/`
 > **Cómo ejecutarlo**: `npm run server`
-> **Prerequisito**: haber leído los análisis de `server-noob` y `server-noob-mejorada`
 
-En `server-noob-mejorada` resolvimos la organización (Router) y la performance (Pool). Pero los endpoints todavía mezclan **tres cosas distintas** en el mismo lugar: manejar el request HTTP, aplicar reglas de negocio, y hacer queries a la base de datos. Esta versión separa esas responsabilidades en **tres capas**.
+Este documento explica **cómo está organizado el proyecto y por qué**. La API hace un CRUD de `alumnos` y `cursos` contra PostgreSQL, pero en vez de meter todo en un archivo, separa el código en **capas**, cada una con una única responsabilidad: manejar el request HTTP, aplicar las reglas de negocio, y hacer las queries a la base de datos.
+
+Más abajo, además de las capas, se explica la clase `DbPg`, que concentra el *boilerplate* de PostgreSQL para que los repositories queden reducidos a SQL.
 
 ---
 
@@ -47,8 +48,12 @@ src/
 │   ├── alumnos-service.js         ← Cocina: lógica de negocio (validaciones, cálculos)
 │   └── cursos-service.js
 ├── repositories/
-│   ├── alumnos-repository.js      ← Responsable del depósito: queries SQL contra PostgreSQL
-│   └── cursos-repository.js
+│   ├── alumnos-repository.js      ← Responsable del depósito: SQL contra PostgreSQL
+│   ├── cursos-repository.js
+│   └── db-pg.js                   ← Clase helper: Pool + try/catch + LogHelper
+├── entities/
+│   ├── alumno.js                  ← Clases de dominio (Alumno, Curso)
+│   └── curso.js
 ├── configs/
 │   └── db-config.js               ← Configuración de conexión a la base de datos
 └── helpers/
@@ -78,8 +83,10 @@ alumnos-service.js         →  getByIdAsync(5)
   │                             Devuelve el alumno con el campo "edad" agregado
   ▼
 alumnos-repository.js      →  getByIdAsync(5)
-  │                             Ejecuta: SELECT * FROM alumnos WHERE id=$1
+  │                             Ejecuta: SELECT * FROM alumnos WHERE id=$1 (a través de DbPg)
   │                             Devuelve el row o null
+  ▼
+db-pg.js (DbPg)            →  Toma una conexión del Pool, corre la query, devuelve .rows[0]
   ▼
 PostgreSQL
 ```
@@ -90,17 +97,14 @@ Fijate que **cada capa solo habla con la de abajo**. El controller no sabe de SQ
 
 ## 📂 ¿Qué hace cada carpeta?
 
-Antes de ver cada capa, un resumen rápido de **qué contiene cada carpeta** y por qué existe:
-
 | Carpeta | Qué contiene | ¿Por qué existe? |
 |---------|-------------|-------------------|
 | `controllers/` | Routers de Express que reciben requests y responden con status codes | Separar la lógica HTTP del resto — si cambiás de Express a Fastify, solo tocás acá |
 | `services/` | Clases con lógica de negocio: validaciones, cálculos, reglas | Centralizar las reglas para que no se repitan en cada endpoint |
-| `repositories/` | Clases que ejecutan SQL contra la base de datos | Aislar el acceso a datos — si cambiás de PostgreSQL a SQL Server, solo tocás acá |
+| `repositories/` | Clases que ejecutan SQL a través de `DbPg` | Aislar el acceso a datos — si cambiás de PostgreSQL a SQL Server, solo tocás acá |
 | `entities/` | Clases que representan las tablas (`Alumno`, `Curso`) | Crear objetos con estructura definida desde código, no depender siempre de `req.body` |
 | `configs/` | Configuración de conexión a la base de datos | Centralizar en un lugar las credenciales y parámetros |
 | `helpers/` | Utilidades transversales (LogHelper) | Funcionalidad compartida que no pertenece a ninguna capa específica |
-| `router/` | Routers de la versión anterior (server-noob-mejorada) | Referencia histórica — en la versión con capas usamos `controllers/` |
 
 > 💡 **Cada carpeta tiene una sola razón de existir.** Si mañana cambiás algo, sabés exactamente dónde buscarlo. Esa es la idea: que el código se encuentre donde lo esperás.
 
@@ -120,10 +124,10 @@ El controller es un `Router` de Express. Su trabajo es:
 // alumnos-controller.js
 router.get('/:id', async (req, res) => {
     try {
-        let id = req.params.id;                                    // 1. Leo
+        let id = req.params.id;                                     // 1. Leo
         const returnEntity = await currentService.getByIdAsync(id); // 2. Llamo
         if (returnEntity != null){
-            res.status(StatusCodes.OK).json(returnEntity);         // 3. Respondo 200
+            res.status(StatusCodes.OK).json(returnEntity);          // 3. Respondo 200
         } else {
             res.status(StatusCodes.NOT_FOUND).send(`No se encontro...`);
         }
@@ -136,13 +140,33 @@ router.get('/:id', async (req, res) => {
 
 > 💡 **El controller es el único que conoce `req`, `res`, y los status codes HTTP.** Ninguna otra capa debería importar Express ni devolver status codes.
 
+#### El PUT — ID en la URL y validación contra el body
+
+En REST, la URL identifica **qué recurso** estás modificando. Por eso `GET /:id`, `PUT /:id` y `DELETE /:id` llevan el ID en la URL. En el `PUT`, además, validamos que el ID de la URL coincida con el del body si el body lo trae:
+
+```js
+router.put('/:id', async (req, res) => {
+    let id = parseInt(req.params.id);   // ID de la URL (fuente de verdad)
+    let entity = req.body;
+
+    if (entity.id && parseInt(entity.id) !== id) {
+        return res.status(StatusCodes.BAD_REQUEST)
+            .send(`El id de la URL (${id}) no coincide con el id del body (${entity.id}).`);
+    }
+    entity.id = id;   // usamos el id de la URL, no el del body
+    // ...
+});
+```
+
+> 💡 **La regla**: el ID de la URL es la **fuente de verdad**. Si el body manda `PUT /api/alumnos/5` con `{ "id": 99 }`, ¿modificás el 5 o el 99? Devolvemos un **400** claro en vez de un bug silencioso.
+
 ---
 
 ### Service — la cocina
 
-El service es una **clase** que contiene la lógica de negocio. Es el lugar donde ponemos las reglas, validaciones, cálculos y transformaciones que no son ni "leer el request" ni "hacer una query".
+El service es una **clase** que contiene la lógica de negocio: las reglas, validaciones, cálculos y transformaciones que no son ni "leer el request" ni "hacer una query".
 
-Siguiendo con la analogía del McDonald's: la cocina no solo sigue recetas — también **llama a otros servicios** cuando lo necesita. Si el pedido es para delivery, la cocina arma la comida y le avisa al **servicio de delivery** que lo retire y lo lleve. La cocina no sale a repartir — solo le dice "llevá esto a tal dirección". Lo mismo pasa en el código: después de crear un alumno, el service podría llamar a un `EmailService` para mandar un mail de bienvenida, o a un `NotificacionService` para avisarle al profesor. El service **orquesta**: hace su trabajo y coordina con otros servicios.
+Siguiendo con la analogía del McDonald's: la cocina no solo sigue recetas — también **llama a otros servicios** cuando lo necesita. Si el pedido es para delivery, la cocina arma la comida y le avisa al **servicio de delivery** que lo retire. Lo mismo en el código: después de crear un alumno, el service podría llamar a un `EmailService` para mandar un mail de bienvenida. El service **orquesta**: hace su trabajo y coordina con otros servicios.
 
 ```
 AlumnosService (la cocina)
@@ -151,11 +175,11 @@ AlumnosService (la cocina)
     └── EmailService             → "Mandá el mail de bienvenida" (servicio de delivery)
 ```
 
-En esta versión, `AlumnosService` hace dos cosas concretas que antes no existían:
+En este proyecto, `AlumnosService` hace dos cosas concretas que el repository no hace:
 
 #### 1. Calcular la edad del alumno
 
-La base de datos guarda `fecha_nacimiento`, pero la **edad** es un dato que cambia con el tiempo — no tiene sentido guardarlo. El service lo calcula al vuelo:
+La base guarda `fecha_nacimiento`, pero la **edad** cambia con el tiempo — no tiene sentido guardarla. El service la calcula al vuelo:
 
 ```js
 // alumnos-service.js
@@ -178,24 +202,11 @@ getAllAsync = async () => {
 }
 ```
 
-Ahora cuando hacés `GET /api/alumnos/1`, la respuesta incluye:
-
-```json
-{
-    "id": 1,
-    "nombre": "Liam",
-    "apellido": "Cohen",
-    "fecha_nacimiento": "2008-04-05",
-    "edad": 18,
-    "..."
-}
-```
-
-> 🤔 **¿Por qué no calcular la edad en la base de datos?** Podrías hacer `EXTRACT(YEAR FROM AGE(fecha_nacimiento))` en SQL, pero eso mezcla lógica de negocio con la query. Si mañana la regla cambia (por ejemplo, "la edad se calcula al 1 de marzo de cada año" para temas académicos), preferís cambiar una función en JavaScript y no tocar el SQL.
+> 🤔 **¿Por qué no calcular la edad en la base de datos?** Podrías hacer `EXTRACT(YEAR FROM AGE(fecha_nacimiento))` en SQL, pero eso mezcla lógica de negocio con la query. Si mañana la regla cambia (por ejemplo, "la edad se calcula al 1 de marzo"), preferís cambiar una función en JavaScript y no tocar el SQL.
 
 #### 2. Validar que el curso existe antes de crear/actualizar un alumno
 
-Cuando alguien manda un POST para crear un alumno con `id_curso: 999`, ¿qué pasa si el curso 999 no existe? Sin validación, PostgreSQL tira un error críptico de foreign key. Con validación en el service, devolvemos un mensaje claro:
+Si alguien manda un POST con `id_curso: 999` y ese curso no existe, sin validación PostgreSQL tira un error críptico de foreign key. Con validación en el service, devolvemos un mensaje claro:
 
 ```js
 // alumnos-service.js
@@ -224,51 +235,55 @@ AlumnosController
                     └── CursosRepository
 ```
 
-> ⚠️ **Trampa**: si mandás un POST con `{ "id_curso": 999 }` y el curso no existe, ahora recibís un **400 Bad Request** con el mensaje `"Error: El curso con id 999 no existe."` en vez de un error 500 con un stack trace de PostgreSQL. Eso es mejor para el cliente y más seguro (no exponés detalles internos de la base de datos).
-
 #### ¿Qué pasaría si NO tuviéramos un service?
 
-Imaginemos que no existe la capa de service y todo se hace en el controller:
+Imaginemos que todo se hace en el controller:
 
-**Escenario 1: "Calculá la edad del alumno"**
+- **"Calculá la edad"**: ponés `calcularEdad()` en el controller. Funciona. Pero mañana necesitás la edad en un reporte PDF de otro módulo → copiás la función. Ahora la misma lógica está en dos lugares.
+- **"No dejes crear un alumno en un curso que no existe"**: ponés la validación en el POST. Pero el PUT también la necesita. Y un endpoint de importar CSV también → se copia y se copia.
 
-Sin service, ponés la función `calcularEdad()` en el controller de alumnos. Funciona. Pero mañana necesitás la edad del alumno también en un **reporte PDF** que genera otro módulo. ¿Copiás la función? Ahora tenés la misma lógica en dos lugares. Si cambia la regla (por ejemplo, "la edad se calcula al 1 de marzo"), hay que cambiarla en los dos.
+Con service, la lógica vive en **un solo lugar** y cualquier endpoint que cree o modifique un alumno pasa por ahí.
 
-Con service, `AlumnosService.getByIdAsync()` ya devuelve el alumno con la edad calculada. Cualquier parte del sistema que necesite un alumno con su edad llama al service — **un solo lugar**.
-
-**Escenario 2: "No dejes crear un alumno en un curso que no existe"**
-
-Sin service, ponés la validación en el endpoint POST del controller. Pero el PUT también necesita esa validación. Y el día que agregues un endpoint de **importar alumnos desde CSV**, también. La validación se copia y se copia.
-
-Con service, `AlumnosService.validarCursoExiste()` se llama desde `createAsync` y `updateAsync` automáticamente. Cualquier forma de crear o modificar un alumno pasa por el service — **la regla se valida siempre**.
-
-**Escenario 3: "Mandá un email cuando se cree un alumno"**
-
-Sin service, ¿dónde ponés el envío del email? ¿En el controller? Entonces el controller sabe de HTTP, de emails, y probablemente de la base de datos. Hace todo y no hace nada bien.
-
-Con service:
-
-```js
-createAsync = async (entity) => {
-    await this.validarCursoExiste(entity.id_curso);
-    const newId = await this.AlumnosRepository.createAsync(entity);
-    await this.EmailService.enviarBienvenida(entity);    // ← fácil de agregar
-    return newId;
-}
-```
-
-El controller no se entera. El repository tampoco.
-
-> 💡 **Regla práctica**: si la lógica se necesita en más de un endpoint, va en el service. Si la dejás en el controller, la vas a copiar.
+> 💡 **Regla práctica**: si una regla de negocio se necesita en más de un endpoint, va en el service. Si la dejás en el controller, la vas a terminar copiando.
 
 ---
 
 ### Repository — el responsable del depósito
 
-El repository es una **clase** que ejecuta las queries SQL. Es el único que conoce la base de datos — si mañana cambiás de PostgreSQL a MySQL o Supabase, solo tocás esta capa.
+El repository es una **clase** que ejecuta las queries SQL. Es el único que conoce las tablas. Pero **no toca el `Pool` de `pg` directamente** — delega en la clase `DbPg` (`this.db`):
 
 ```js
 // alumnos-repository.js
+import Db from './db-pg.js';
+
+export default class AlumnosRepository {
+    constructor() {
+        this.db = new Db();
+    }
+
+    getAllAsync = async () => {
+        const sql = `SELECT * FROM alumnos`;
+        return await this.db.queryAll(sql);
+    }
+
+    getByIdAsync = async (id) => {
+        const sql = `SELECT * FROM alumnos WHERE id=$1`;
+        return await this.db.queryOne(sql, [id]);
+    }
+}
+```
+
+El repository queda reducido a **SQL + valores + llamar al método correcto de `DbPg`**. El `try/catch`, el `Pool` y el logueo viven en `DbPg` (ver la sección siguiente).
+
+---
+
+## 🧰 La clase `DbPg` — encapsular el acceso a PostgreSQL
+
+### ¿Cuál es el problema?
+
+Antes de tener `DbPg`, cada repository repetía el mismo *boilerplate*. Mirá cómo se vería `getAllAsync` sin el helper:
+
+```js
 getAllAsync = async () => {
     let returnArray = null;
     try {
@@ -282,193 +297,181 @@ getAllAsync = async () => {
 }
 ```
 
-Cosas a notar:
+Lo único que cambia entre `alumnos` y `cursos` es **el SQL**. Todo lo demás — el `try/catch`, el `LogHelper.logError`, el manejo del `Pool`, el `.rows` — es boilerplate que se repetiría textualmente. Con 10 entidades (profesores, materias, horarios...), tendrías 10 repositories con el mismo boilerplate copiado.
 
-- **Pool lazy**: el Pool se crea recién cuando se necesita (`getDBPool()`), no en el constructor. Esto evita intentar conectar a la base cuando todavía no se cargó la configuración.
-- **LogHelper**: en vez de `console.log(error)` suelto, usa un helper que puede loguear a archivo y/o consola según la configuración del `.env`.
-- **Errores silenciados**: si la query falla, el repository loguea el error y devuelve `null` o `0`. El controller interpreta eso como "no se encontró" o "error interno". Esto es una simplificación didáctica — en un proyecto real, dejarías que el error suba al controller para poder distinguir "no encontrado" de "la base se cayó".
+### La solución: una clase `DbPg`
+
+La idea es **extraer todo lo que se repite** a una clase aparte que se encargue de:
+
+- Crear y administrar el Pool (una sola vez, *lazy*).
+- Ejecutar queries con `try/catch`.
+- Loguear errores con `LogHelper`.
+- Extraer los datos del resultado de `pg` (`.rows`, `.rows[0]`, `.rowCount`).
+
+```
+SIN DbPg                                 CON DbPg
+┌─────────────────────────┐              ┌─────────────────────────┐
+│  AlumnosRepository      │              │  AlumnosRepository      │
+│  ├─ import pg + Pool    │              │  ├─ import Db           │
+│  ├─ import config       │              │  └─ métodos con SQL     │
+│  ├─ import LogHelper    │              │     (sin try/catch,     │
+│  ├─ getDBPool()         │              │      sin Pool,          │
+│  └─ métodos con:        │              │      sin LogHelper)     │
+│     ├─ try/catch        │              └─────────┬───────────────┘
+│     ├─ getDBPool()      │                        │ usa
+│     ├─ LogHelper        │              ┌─────────▼───────────────┐
+│     └─ resultPg.rows    │              │  DbPg                   │
+└─────────────────────────┘              │  ├─ Pool (lazy)         │
+                                         │  ├─ try/catch           │
+(y lo mismo en cada                      │  ├─ LogHelper           │
+ repository...)                          │  └─ queryAll/queryOne/  │
+                                         │     queryReturnId/      │
+                                         │     queryRowCount       │
+                                         └─────────────────────────┘
+```
+
+### Los 4 métodos de `DbPg`
+
+Cada método encapsula un **patrón de uso distinto** que aparece en los repositories:
+
+| Método | ¿Qué devuelve? | ¿Cuándo se usa? | Ejemplo |
+|--------|----------------|-----------------|---------|
+| `queryAll(sql, values?)` | `rows` (array) o `null` | SELECT que devuelve una lista | `SELECT * FROM cursos` |
+| `queryOne(sql, values?)` | `rows[0]` (objeto) o `null` | SELECT que devuelve un registro | `SELECT * FROM cursos WHERE id=$1` |
+| `queryReturnId(sql, values?)` | `rows[0].id` (número) o `0` | INSERT con `RETURNING id` | `INSERT INTO cursos (...) RETURNING id` |
+| `queryRowCount(sql, values?)` | `rowCount` (número) o `0` | UPDATE / DELETE | `DELETE FROM cursos WHERE id=$1` |
+
+Los cuatro hacen lo mismo internamente:
+1. Obtienen el Pool (lazy).
+2. Ejecutan la query con `try/catch`.
+3. Si falla, loguean el error con `LogHelper`.
+4. Extraen el dato relevante del resultado de `pg`.
+
+```js
+// db-pg.js
+queryOne = async (sql, values = null) => {
+    let returnEntity = null;
+    try {
+        const resultPg = values
+            ? await this.getDBPool().query(sql, values)
+            : await this.getDBPool().query(sql);
+        if (resultPg.rows.length > 0) {
+            returnEntity = resultPg.rows[0];
+        }
+    } catch (error) {
+        LogHelper.logError(error);
+    }
+    return returnEntity;
+}
+```
+
+### Programar contra una interfaz
+
+El repository hace `this.db = new Db()` y después `this.db.queryAll(...)`, `this.db.queryOne(...)`, etc. No sabe (ni le importa) si por dentro hay un Pool de `pg`. Solo sabe que tiene un objeto `db` con 4 métodos.
+
+> 💡 Esto se llama **"programar contra una interfaz"**. Si mañana quisieras usar otro motor (SQL Server, Supabase), bastaría con escribir otra clase con esos mismos 4 métodos y cambiar el `import Db from './db-pg.js'` por el del nuevo motor — el resto del repository quedaría intacto. (Ojo: las queries deberían adaptar los placeholders, porque cada motor tiene su sintaxis: `$1` en PostgreSQL, `@param1` en SQL Server.)
+
+> 🧠 **¿Por qué no se hizo así desde el principio?** Porque primero hay que **ver el problema**. Si arrancás con `DbPg` sin haber sentido el dolor del boilerplate repetido, no entendés qué resuelve. La regla clásica es la **"regla de tres"**: si copiaste algo dos veces (tres copias en total), es hora de extraerlo. Primero hacelo funcionar, después refactorizá cuando el patrón se repite.
 
 ---
 
-## 🔧 Otros cambios respecto a la versión anterior
+## 🔧 Otras decisiones de diseño que conviene conocer
+
+### Pool en vez de Client (performance)
+
+`DbPg` usa un **Pool** de conexiones, no un `Client` nuevo por request. Conectarse a PostgreSQL es costoso (abrir socket TCP, handshake de autenticación, proceso nuevo en el servidor: ~20-100 ms). Un `Client` por request crearía y destruiría una conexión cada vez, y bajo carga agotaría el límite de conexiones de PostgreSQL.
+
+```
+CON CLIENT (lento):
+Request 1 → [crear conexión] → query → [cerrar conexión]
+Request 2 → [crear conexión] → query → [cerrar conexión]
+
+CON POOL (rápido):
+Arranque  → [crear N conexiones]
+Request 1 → [tomar del pool] → query → [devolver al pool]
+Request 2 → [tomar del pool] → query → [devolver al pool]
+```
+
+> 💡 **Regla simple**: si tu programa se queda corriendo (un servidor Express), usá **Pool**. Si corre una vez y termina (un script de migración), un **Client** alcanza. Además, con Pool no hace falta `finally` con `client.end()` — el pool administra las conexiones solo.
+
+### Queries parametrizadas (`$1, $2`) — protección contra SQL injection
+
+Todas las queries usan **parámetros posicionales** (`$1`, `$2`, ...) con un array de `values`, nunca concatenación de strings:
+
+```js
+// ✅ Seguro — pg escapa el valor
+const sql = `SELECT * FROM alumnos WHERE id=$1`;
+return await this.db.queryOne(sql, [id]);
+
+// ❌ Vulnerable — NUNCA hagas esto
+const sql = `SELECT * FROM alumnos WHERE id=${id}`;
+```
+
+Si un usuario manda `'; DROP TABLE alumnos; --` como valor, con `$1` la query no se rompe porque `pg` lo trata como **dato**, no como SQL. Con interpolación de string, sería una inyección grave.
 
 ### Variables de entorno con dotenv
 
-`server.js` ahora importa `dotenv/config` al arrancar, y `db-config.js` exporta la configuración que lee del archivo `.env`:
+`server.js` importa `dotenv/config` al arrancar, y `db-config.js` lee las credenciales de `process.env` (archivo `.env`) — no están escritas en el código. Además, con una sola variable `DB_TARGET` se elige a qué base conectarse (`"local"` o `"supabase"`), tomando el juego de variables que corresponda:
 
 ```js
-// server.js
-import 'dotenv/config'      // carga las variables del .env en process.env
-
 // db-config.js
-const DBConfigBest = {
-    host     : process.env.DB_HOST       ?? '',
-    database : process.env.DB_DATABASE   ?? '',
-    user     : process.env.DB_USER       ?? '',
-    password : process.env.DB_PASSWORD   ?? '',
-    port     : process.env.DB_PORT       ?? 5432
+const target = (process.env.DB_TARGET ?? 'local').trim().toLowerCase();
+const prefix = target === 'supabase' ? 'DB_SUPABASE_' : 'DB_LOCAL_';
+
+const DBConfig = {
+    host     : process.env[prefix + 'HOST']     ?? 'localhost',
+    database : process.env[prefix + 'DATABASE'] ?? '',
+    user     : process.env[prefix + 'USER']     ?? '',
+    password : process.env[prefix + 'PASSWORD'] ?? '',
+    port     : process.env[prefix + 'PORT']     ?? 5432,
+    ssl      : target === 'supabase' ? { rejectUnauthorized: false } : false
 }
-export default DBConfigBest;
 ```
 
-Esto resuelve dos problemas de las versiones anteriores:
-- **Las credenciales no están en el código fuente** — están en `.env` (que se agrega a `.gitignore`).
-- **El puerto es configurable**: `const port = process.env.PORT || 3000;`
+Así, cambiar de PostgreSQL local a Supabase es editar **una sola línea** del `.env`. El puerto del servidor también es configurable: `const port = process.env.PORT || 3000;`.
 
-> 💡 **El archivo `.env-template`** tiene las variables sin valores reales. Cada alumno copia ese archivo como `.env` y completa con sus datos locales.
+> ⚠️ **Cuidado con el `.env`**: que las credenciales salgan del código es solo media solución — el `.env` **no debe commitearse** (tiene que estar en `.gitignore`). Y si una credencial estuvo alguna vez en un commit, además de sacarla hay que **rotarla** (sigue en el historial de git). Esto se trabaja en `prompting/09 - Seguridad.md`.
 
-### LogHelper — registro de errores centralizado
+### Errores silenciados (simplificación didáctica)
 
-En vez de `console.log(error)` disperso por todo el código, los repositories usan `LogHelper.logError(error)`, que según la configuración del `.env` puede:
-- Mostrar el error en consola
-- Guardarlo en un archivo de log con fecha
-
-### try/catch en los controllers
-
-Las versiones anteriores no tenían `try/catch` en el controller. Si el service tiraba un error inesperado, el servidor crasheaba. Ahora cada endpoint está envuelto en `try/catch`:
-
-```js
-router.post('', async (req, res) => {
-    try {
-        // ... lógica normal ...
-    } catch (error) {
-        console.log(error);
-        res.status(StatusCodes.BAD_REQUEST).send(`Error: ${error.message}`);
-    }
-});
-```
-
-Esto es importante ahora que el service puede tirar errores de validación (como "el curso no existe").
-
----
-
-## 📊 Comparación con las versiones anteriores
-
-| Aspecto | server-noob | server-noob-mejorada | server (capas) |
-|---|---|---|---|
-| **Archivos** | 1 | 3 | 8+ |
-| **Conexión DB** | Client por request | Pool compartido | Pool lazy en repository |
-| **Organización** | Todo junto | Separado por recurso | Separado por capa y recurso |
-| **Lógica de negocio** | No hay | No hay | Edad calculada, curso validado |
-| **Manejo de errores** | try/catch con finally | try/catch sin finally | try/catch en controller + LogHelper en repository |
-| **Credenciales** | Hardcodeadas | Hardcodeadas | Variables de entorno (.env) |
-| **Puerto** | Hardcodeado | Hardcodeado | Desde .env |
-
----
-
-## 🧠 ¿Por qué no dejamos todo en el controller?
-
-En un proyecto chico como este, separar en capas puede parecer **excesivo** — son más archivos y más código para lo mismo. Pero pensá qué pasa cuando crece:
-
-**Sin capas** (todo en el controller):
-- ¿Dónde pongo la validación de que el curso existe? → En el endpoint de POST
-- ¿Y en el PUT también? → Copio la misma validación
-- ¿Y si mañana agrego un endpoint de importar alumnos desde CSV? → Copio de nuevo
-- Resultado: la misma regla repetida en 3 lugares. Si cambia, hay que cambiarla en los 3.
-
-**Con capas** (lógica en el service):
-- La validación está en `AlumnosService.validarCursoExiste()`
-- POST, PUT y cualquier endpoint futuro llaman al mismo service
-- Si la regla cambia, se cambia en **un solo lugar**
-
-> 💡 **Regla práctica**: si una regla de negocio se necesita en más de un endpoint, tiene que estar en el service. Si la dejás en el controller, la vas a terminar copiando.
-
----
-
-## 📊 Resumen visual
-
-```
-server-noob-mejorada                     server (capas)
-┌──────────────────────┐                 ┌──────────────────────┐
-│  server-noob-mej.js  │                 │  server.js           │
-│  └─ app.use(routers) │                 │  └─ app.use(controllers)
-└──────────────────────┘                 └──────────────────────┘
-         │                                        │
-    ┌────┴────┐                              ┌────┴────┐
-    ▼         ▼                              ▼         ▼
-┌────────┐ ┌────────┐                  ┌──────────┐ ┌──────────┐
-│alumnos │ │cursos  │                  │ alumnos  │ │ cursos   │
-│router  │ │router  │                  │controller│ │controller│
-│        │ │        │                  └────┬─────┘ └────┬─────┘
-│ SQL +  │ │ SQL +  │                       │            │
-│ Pool + │ │ Pool + │                  ┌────▼─────┐ ┌────▼─────┐
-│ status │ │ status │                  │ alumnos  │ │ cursos   │
-│ codes  │ │ codes  │                  │ service  │ │ service  │
-│ TODO   │ │ TODO   │                  │ (edad,   │ │          │
-│ junto  │ │ junto  │                  │ validar  │ │          │
-└────────┘ └────────┘                  │  curso)  │ │          │
-                                       └────┬─────┘ └────┬─────┘
-                                            │            │
-                                       ┌────▼──────┐┌───▼───────┐
-                                       │ alumnos   ││ cursos    │
-                                       │ repository││ repository│
-                                       │ (SQL+Pool)││ (SQL+Pool)│
-                                       └───────────┘└───────────┘
-```
-
-En la versión con routers, cada archivo mezcla **tres responsabilidades** (HTTP + lógica + SQL). En la versión con capas, cada archivo tiene **una sola responsabilidad**. Si mañana cambiás la base de datos, solo tocás los repositories. Si cambiás una regla de negocio, solo tocás el service. Si cambiás la URL de un endpoint, solo tocás el controller.
-
----
-
-## 🔁 Cada capa se puede intercambiar
-
-Esta es una de las ventajas más importantes de separar en capas: **podés reemplazar una capa entera sin tocar las demás**.
-
-### ¿Cambiar de base de datos?
-
-Hoy los repositories usan PostgreSQL con la librería `pg`. Si mañana querés usar SQL Server, Supabase, o incluso un archivo JSON, solo cambiás los repositories. El controller y el service ni se enteran:
-
-```
-                    HOY                                 MAÑANA
-Controller ──► Service ──► Repository (pg)     Controller ──► Service ──► Repository (mssql)
-                                                    ↑ igual        ↑ igual        ↑ cambia solo esto
-```
-
-De hecho, ya tenemos preparadas las clases `db-pg.js` y `db-mssql.js` que permiten hacer ese cambio con **una sola línea** (ver documento [db-pg-explicacion.md](db-pg-explicacion.md)).
-
-### ¿Cambiar de framework web?
-
-Si mañana querés reemplazar Express por Fastify o Koa, solo cambiás los controllers. Los services y repositories no importan Express — no saben que existe.
-
-### ¿Agregar una app móvil que use la misma lógica?
-
-El service ya tiene `calcularEdad()` y `validarCursoExiste()`. Una app móvil (o un script de migración, o un job nocturno) puede usar el mismo service sin pasar por Express.
-
-> 🤔 **Pensalo así**: las capas son como enchufes. Mientras el enchufe (la interfaz) sea el mismo, podés cambiar lo que hay atrás. El controller es el enchufe que el service necesita. El repository es el enchufe que el service usa. Mientras cada capa respete los métodos que la otra espera (`getAllAsync`, `getByIdAsync`, `createAsync`...), todo funciona.
+Si una query falla, `DbPg` loguea el error con `LogHelper` y devuelve `null` o `0`. El controller interpreta eso como "no se encontró" o "error interno". Es una simplificación para el curso: en un proyecto real dejarías que el error suba para poder distinguir **"no encontrado"** de **"la base se cayó"** — con el `return null` actual, esos dos casos se confunden.
 
 ---
 
 ## 📦 Carpeta `entities/` — crear objetos desde código
 
-En el POST normal, los datos del alumno vienen del body del request:
-
-```js
-// Controller — los datos vienen del cliente
-let entity = req.body;    // ← un objeto genérico, sin estructura definida
-const newId = await currentService.createAsync(entity);
-```
-
-Funciona, pero `req.body` es un objeto genérico — no tiene estructura, no tiene autocompletado, no sabés qué campos tiene hasta que mirás la documentación. ¿Y si querés crear un alumno **desde código** (por ejemplo en un test, un script, o un endpoint de demostración)?
-
-Para eso existe la carpeta `entities/` con la clase `Alumno`:
+En el POST normal, los datos del alumno vienen del body del request (`req.body`), un objeto genérico sin estructura definida. ¿Y si querés crear un alumno **desde código** (un test, un script, un endpoint de demostración)? Para eso está la clase `Alumno`:
 
 ```js
 import Alumno from './../entities/alumno.js'
 
 // Crear un alumno con campos definidos — sabés exactamente qué lleva
 const nuevoAlumno = new Alumno('Willy', 'Wonka', 1, '2005-07-15', true);
-
 const newId = await currentService.createAsync(nuevoAlumno);
 ```
 
 Podés ver esto funcionando en el endpoint `GET /api/alumnos/test-insert`.
 
-> 💡 **La clase `Alumno` y `req.body` producen lo mismo**: un objeto con las propiedades `nombre`, `apellido`, `id_curso`, `fecha_nacimiento` y `hace_deportes`. La diferencia es que con la clase tenés **estructura y claridad** — sabés qué campos tiene, el IDE te los autocompleta, y si mañana querés agregar validación en el constructor podés hacerlo en un solo lugar.
+> 💡 **La clase `Alumno` y `req.body` producen lo mismo**: un objeto con `nombre`, `apellido`, `id_curso`, `fecha_nacimiento` y `hace_deportes`. La diferencia es que con la clase tenés **estructura y claridad** — sabés qué campos lleva, el IDE te autocompleta, y si mañana querés agregar validación en el constructor, lo hacés en un solo lugar.
+
+---
+
+## 🔁 La gran ventaja: cada capa se puede intercambiar
+
+```
+                    HOY                                 MAÑANA
+Controller ──► Service ──► Repository (pg)     Controller ──► Service ──► Repository (otro motor)
+                                                    ↑ igual        ↑ igual        ↑ cambia solo esto
+```
+
+- **¿Cambiar de base de datos?** Solo tocás los repositories / la clase `Db`. El controller y el service ni se enteran.
+- **¿Cambiar de framework web?** Solo tocás los controllers. Los services y repositories no importan Express — no saben que existe.
+- **¿Agregar una app móvil o un job nocturno?** Pueden usar el mismo service (con `calcularEdad`, `validarCursoExiste`) sin pasar por Express.
+
+> 🤔 **Pensalo así**: las capas son como enchufes. Mientras la interfaz (los métodos `getAllAsync`, `getByIdAsync`, `createAsync`...) sea la misma, podés cambiar lo que hay atrás sin romper lo de adelante.
 
 ---
 
 ## 🔗 ¿Qué sigue?
 
-Ahora que tenemos la arquitectura en capas, el siguiente paso es reducir el **código repetido dentro de los repositories**. Los dos repositories (`alumnos-repository.js` y `cursos-repository.js`) repiten el mismo boilerplate: imports, Pool, try/catch, LogHelper, `.rows`...
-
-Eso lo resolvemos en el siguiente documento: [DbPg — Clase helper de acceso a datos](db-pg-explicacion.md).
+Ahora que entendés cómo está armado el proyecto, el siguiente paso es **agregarle funcionalidad vos mismo**, prompteando con IA de forma incremental. Todo eso está en la carpeta **[`prompting/`](../prompting/00%20-%20README%20-%20Como%20usar%20este%20TP%20de%20Prompting.md)**: agregar una tabla nueva con su CRUD, refactorizar la duplicación, extraer helpers, validar input, sumar autenticación JWT, y más.

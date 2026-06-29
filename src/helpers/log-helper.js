@@ -18,6 +18,9 @@ class LogHelper {
         const fullFileName   = this.getFullFileName();
 
         if (this.logToFileEnabled) {
+            // Nos aseguramos de que la carpeta de logs exista (la crea si falta).
+            // Así siempre se guarda en el folder del proyecto (LOG_FILE_PATH, p.ej. ./logs/).
+            fs.mkdirSync(this.filePath, { recursive: true });
             // Escribir el error en el archivo de registro
             fs.appendFile(fullFileName, formattedError + '\n', (err) => {
                 if (err) {

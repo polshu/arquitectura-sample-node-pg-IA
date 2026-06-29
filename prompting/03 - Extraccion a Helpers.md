@@ -1,0 +1,82 @@
+# Ejercicio 03 — Extracción de código repetido a Helpers ⭐⭐
+
+**Foco:** modularización, separación de responsabilidades
+**Tiempo estimado:** 1 clase
+[⬅️ Volver al README](./00%20-%20README%20-%20Como%20usar%20este%20TP%20de%20Prompting.md)
+
+---
+
+## 🎯 Objetivo
+
+Que uses la IA para **extraer lógica repetida a funciones reutilizables (helpers)**. A diferencia del ejercicio 02 (que ataca la duplicación entre entidades), este ataca la duplicación **dentro de una misma capa**: el patrón que se repite endpoint por endpoint.
+
+> 💡 Dato del proyecto: ya existe `src/helpers/log-helper.js` y dos repositorios que delegan el manejo del `Pool` a una clase `DbPg` (`db-pg.js`). O sea: **la idea de "extraer a un helper" ya está plantada en el código**. Tu trabajo es llevarla más lejos.
+
+---
+
+## 📋 El problema
+
+Abrí `alumnos-controller.js` y mirá cuántas veces se repite **esto**:
+
+```js
+try {
+    const algo = await currentService.loQueSea();
+    if (algo != null) {
+        res.status(StatusCodes.OK).json(algo);
+    } else {
+        res.status(StatusCodes.NOT_FOUND).send(`No se encontro...`);
+    }
+} catch (error) {
+    console.log(error);
+    res.status(StatusCodes.INTERNAL_SERVER_ERROR).send(`Error: ${error.message}`);
+}
+```
+
+Está en **cada uno de los 5 endpoints**, y otra vez en `cursos-controller.js`. Candidatos a helper:
+
+- Un wrapper de manejo de errores async (que evite el try/catch en cada endpoint).
+- Un helper de respuestas (`responderOk`, `responderNotFound`, `responderError`) para unificar el formato.
+- Sacar `calcularEdad` / `agregarEdad` de `alumnos-service.js` a un helper de fechas reutilizable.
+
+---
+
+## 📦 Qué tenés que lograr
+
+1. Identificar **al menos 2 piezas** de código repetido extraíbles a helpers.
+2. Crear los helpers en `src/helpers/`.
+3. Reemplazar las repeticiones por llamadas al helper.
+4. Que los endpoints respondan **exactamente igual** que antes.
+
+---
+
+## 🤖 Cómo encarar el prompting
+
+**Prompt de diagnóstico primero:**
+
+> Pegale `alumnos-controller.js` y `cursos-controller.js` y pedile: *"identificá qué lógica se repite y propondría extraer a un helper, sin escribir código todavía. Listame los candidatos ordenados por cuánto código ahorran."*
+
+**Después, ejecución:**
+
+> Pedí **un helper a la vez**. Restricción clave: *"el helper tiene que ser una función pura / un módulo independiente, exportado con ES modules, y no debe cambiar la respuesta HTTP que ya devuelven los endpoints"*.
+
+> ⚠️ **Trampa**: un wrapper async de manejo de errores (tipo `asyncHandler`) es elegante pero cambia cómo fluyen los errores. Si lo metés, **probá los casos de error** (pedí un id que no existe, mandá un body roto). La IA te lo va a dar lindo pero puede tragarse un `status` distinto al original.
+
+> 💡 **Tip**: pedile a la IA que te diga **dónde poner el helper** y **cómo nombrarlo** según la convención del proyecto (mirá cómo está hecho `LogHelper`: clase con métodos estáticos vs. funciones sueltas). Coherencia > "lo más moderno".
+
+---
+
+## 🔍 Verificación del resultado
+
+- [ ] Los helpers están en `src/helpers/` y son `import`-ables (ES modules, no `require`).
+- [ ] Cada endpoint que usa el helper quedó **más corto** y se lee mejor.
+- [ ] Los **status codes no cambiaron**: probá happy path **y** casos de error (404, 400) en Postman.
+- [ ] Si extrajiste `calcularEdad`, el cálculo de edad de los alumnos sigue dando el mismo número.
+- [ ] El helper no quedó "atado" a una entidad puntual (es reutilizable por `cursos`, `profesores`, etc.).
+
+> 🤔 Pregunta para el oral: *¿un helper de respuestas debería conocer los status codes, o se los deberías pasar el controller? ¿Por qué? ¿Dónde "vive" la decisión de devolver 404?*
+
+---
+
+## ✅ Entrega
+
+Bitácora + commit. En la reflexión, explicá qué **no** extrajiste a un helper y por qué (no todo lo que se repite conviene extraerlo — a veces dos cosas se parecen hoy pero van a divergir mañana).

@@ -22,7 +22,7 @@ The `server` script uses `node --watch` for auto-reload on save. No test runner 
 1. PostgreSQL must be running locally.
 2. Run `documents/database/script-postgress.sql` to create tables (`cursos`, `alumnos`) and seed data.
 3. Copy `.env-template` to `.env` and fill in your DB credentials and log path.
-4. Note: `src/configs/db-config.js` currently uses hardcoded credentials, not `process.env`. The commented-out block at the bottom shows the dotenv-based version.
+4. `src/configs/db-config.js` reads credentials from `process.env` (the `.env` file). Switch between local PostgreSQL and Supabase by editing a single line — `DB_TARGET` (`"local"` or `"supabase"`); both credential sets (`DB_LOCAL_*` / `DB_SUPABASE_*`) live in `.env`, and SSL is enabled automatically for Supabase.
 
 ## Architecture
 
@@ -38,7 +38,7 @@ server.js → mounts controllers as routers
 
 - **Controllers** export an Express `Router`, mounted at `/api/alumnos` and `/api/cursos`.
 - **Services** are instantiated once per controller. `AlumnosService` depends on `CursosService` for FK validation.
-- **Repositories** (`*-repository-new.js`) hold a `DbPg` instance and run SQL through it rather than touching a `Pool` directly.
+- **Repositories** (`*-repository.js`) hold a `DbPg` instance and run SQL through it rather than touching a `Pool` directly. (Their internal `console.log` strings still say `-new`, a leftover from when the helper-based version was introduced alongside the original.)
 - **Entities** (`Alumno`, `Curso`) are plain classes used to construct objects from code (see `/api/alumnos/test-insert`).
 - **LogHelper** is a singleton that logs errors to file and/or console based on `.env` settings.
 

@@ -35,13 +35,5 @@ export default class CursosService {
         const rowsAffected = await this.CursosRepository.deleteByIdAsync(id);
         return rowsAffected;
     }
-
-    /*
-    getByIdAsync_PPT = async (id) => {
-        console.log('Estoy en: CursosService.getByIdAsync_PPT()');
-        const returnEntity = await this.CursosRepository.getByIdAsync_PPT(id);
-        return returnEntity;
-    }
-    */
 }
 

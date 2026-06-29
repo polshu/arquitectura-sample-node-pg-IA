@@ -2,9 +2,11 @@
 
 Proyecto educativo de la materia **DAI** (ORT). Una API REST que hace CRUD de alumnos y cursos contra PostgreSQL, construida con una **arquitectura en capas** (controller → service → repository) y una clase helper de acceso a datos (`DbPg`) que aísla todo el boilerplate de PostgreSQL.
 
+*\* **Boilerplate**: código repetitivo y casi siempre idéntico que hay que escribir una y otra vez para que algo funcione (acá: crear el `Pool`, abrir el `try/catch`, loguear el error, extraer `.rows`), pero que no aporta lógica propia de tu aplicación. La idea de un helper como `DbPg` es escribirlo **una sola vez** y reutilizarlo.*
+
 El código es intencionalmente verboso y autoexplicativo, con comentarios pensados para que los estudiantes entiendan cada paso.
 
-> 📖 El repositorio incluye además **4 documentos de explicación** (en `documents/`) que reconstruyen, paso a paso, cómo se llegó desde "todo en un archivo" hasta esta arquitectura en capas. Ver la sección [Documentación — Guía de lectura](#-documentación--guía-de-lectura).
+> 📖 El repositorio incluye además un **documento de explicación** (en `documents/`) que detalla, paso a paso, cómo funciona esta arquitectura en capas y por qué está diseñada así. Ver la sección [Documentación — Guía de lectura](#-documentación--guía-de-lectura).
 
 ---
 
@@ -20,8 +22,8 @@ src/
 │   ├── alumnos-service.js
 │   └── cursos-service.js
 ├── repositories/               ← Acceso a datos (SQL puro a través de DbPg)
-│   ├── alumnos-repository-new.js
-│   ├── cursos-repository-new.js
+│   ├── alumnos-repository.js
+│   ├── cursos-repository.js
 │   └── db-pg.js                ← Clase helper para PostgreSQL (Pool + try/catch + log)
 ├── entities/                   ← Clases que representan las tablas
 │   ├── alumno.js
@@ -54,17 +56,29 @@ Este archivo crea las tablas `cursos` y `alumnos`, y las llena con datos de ejem
 
 ### 3. Configurar la conexión
 
-La configuración de conexión vive en `src/configs/db-config.js`.
+La configuración de conexión vive en `src/configs/db-config.js`, que **lee las credenciales desde `process.env`** (el archivo `.env`). No hay credenciales escritas en el código.
 
-> ⚠️ **Importante**: hoy `db-config.js` usa **credenciales hardcodeadas** (`host`, `database`, `user`, `password`, `port`). El bloque comentado al final del archivo muestra la versión que lee las variables desde `process.env` (dotenv). Si querés usar `.env`, copiá `.env-template` como `.env`, completá tus datos y descomentá ese bloque.
+> 👉 Copiá `.env-template` como `.env` y completá tus datos. Para **cambiar entre PostgreSQL local y Supabase**, editá **una sola línea**: `DB_TARGET`. Ambos juegos de credenciales conviven en el `.env`; `db-config.js` toma el que corresponda (y activa SSL automáticamente para Supabase).
 
 ```env
-DB_HOST       = "localhost"
-DB_DATABASE   = "dai-2025"
-DB_USER       = "postgres"
-DB_PASSWORD   = "root"
-DB_PORT       = 5432
-PORT          = 3000
+# Cambiá SOLO esta línea: "local" o "supabase"
+DB_TARGET = "local"
+
+# PostgreSQL LOCAL
+DB_LOCAL_HOST     = "localhost"
+DB_LOCAL_DATABASE = "DAI"
+DB_LOCAL_USER     = "postgres"
+DB_LOCAL_PASSWORD = "root"
+DB_LOCAL_PORT     = 5432
+
+# Supabase (nube)
+DB_SUPABASE_HOST     = "aws-0-...pooler.supabase.com"
+DB_SUPABASE_DATABASE = "postgres"
+DB_SUPABASE_USER     = "postgres.xxxx"
+DB_SUPABASE_PASSWORD = "TU_CLAVE"
+DB_SUPABASE_PORT     = 5432
+
+PORT = 3000
 ```
 
 ### 4. Instalar dependencias y ejecutar
@@ -202,31 +216,13 @@ Podés ver esto funcionando en el endpoint `GET /api/alumnos/test-insert`.
 
 ## 📚 Documentación — Guía de lectura
 
-En `documents/` hay **4 documentos** que reconstruyen la evolución del código: arrancan con "todo en un archivo" y llegan, paso a paso, hasta la arquitectura en capas con la clase `DbPg` que ves hoy en `src/`. Cada uno analiza una versión, explica sus problemas y cómo la siguiente los resuelve.
+En `documents/` está la explicación completa de **cómo está armado el proyecto y por qué**:
 
-> 📌 **Nota**: el código de las versiones intermedias (V1 a V3) ya no está en `src/` — el repositorio contiene solo la versión final. Los documentos sirven para entender *por qué* el código terminó así.
+| Documento | Qué explica |
+|-----------|-------------|
+| [Arquitectura en capas — Controller → Service → Repository → DbPg](documents/server-capas-explicacion.md) | La arquitectura en capas, el flujo de un request, la lógica de negocio en el service (calcular edad, validar FK), la clase helper `DbPg` y sus 4 métodos, y las decisiones de diseño clave (Pool vs Client, queries parametrizadas `$1`, dotenv, entities). |
 
-### Recorrido recomendado
-
-```
- V1                    V2                       V3                        V4 (versión actual)
- server-noob    →    server-noob-mejorada  →   server (capas)    →     db-pg / DbPg
- ┌──────────┐        ┌──────────────────┐      ┌──────────────┐        ┌──────────────┐
- │ 1 archivo│        │ Router + Pool    │      │ controller   │        │ clase Db     │
- │ Client   │        │ varios archivos  │      │ service      │        │ helper       │
- │ todo     │        │ sin finally      │      │ repository   │        │ 4 métodos    │
- │ junto    │        │                  │      │ dotenv       │        │ reutilizable │
- └──────────┘        └──────────────────┘      └──────────────┘        └──────────────┘
-```
-
-| # | Documento | Qué explica |
-|---|-----------|-------------|
-| 1 | [Server Noob — Análisis de la versión inicial](documents/server-noob-explicacion.md) | Los problemas de meter todo en un solo archivo: `Client` vs `Pool`, código repetido, credenciales hardcodeadas, etc. |
-| 2 | [Server Noob Mejorada — Router + Pool](documents/server-noob-mejorada-explicacion.md) | Cómo separar endpoints con `Router`, reemplazar `Client` por `Pool`, y eliminar el `finally` problemático. |
-| 3 | [Server con Capas — Controller, Service, Repository](documents/server-capas-explicacion.md) | Arquitectura en 3 capas, variables de entorno con dotenv, lógica de negocio en el service (calcular edad, validar FK). |
-| 4 | [DbPg — Clase helper de acceso a datos](documents/db-pg-explicacion.md) | Extraer el boilerplate repetido de los repositories en una clase `Db` reutilizable de 4 métodos. |
-
-> 💡 Cada documento asume que ya leíste el anterior. Si salteás alguno, no vas a entender *por qué* se hace el cambio.
+> 💡 Una vez que entendés la arquitectura, el siguiente paso es **agregarle funcionalidad vos** prompteando con IA de forma incremental: ver la carpeta [`prompting/`](prompting/00%20-%20README%20-%20Como%20usar%20este%20TP%20de%20Prompting.md).
 
 ---
 
