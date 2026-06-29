@@ -1,4 +1,4 @@
-import AlumnosRepository from '../repositories/alumnos-repository-new.js';
+import AlumnosRepository from '../repositories/alumnos-repository.js';
 import CursosService from './cursos-service.js';
 
 function calcularEdad(fechaNacimiento) {

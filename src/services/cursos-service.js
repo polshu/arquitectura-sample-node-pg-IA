@@ -1,4 +1,4 @@
-import CursosRepository from '../repositories/cursos-repository-new.js';
+import CursosRepository from '../repositories/cursos-repository.js';
 
 export default class CursosService {
     constructor() {
