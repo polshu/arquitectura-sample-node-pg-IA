@@ -34,9 +34,10 @@ try {
 
 Está en **cada uno de los 5 endpoints**, y otra vez en `cursos-controller.js` (y en `materias-controller.js`, si lo creaste en el ejercicio 01). Candidatos a helper:
 
-- Un wrapper de manejo de errores async (que evite el try/catch en cada endpoint).
-- Un helper de respuestas (`responderOk`, `responderNotFound`, `responderError`) para unificar el formato.
-- Sacar `calcularEdad` / `agregarEdad` de `alumnos-service.js` a un helper de fechas reutilizable.
+**Estos dos son los que tenés que hacer** (cada uno ejercita un tipo distinto de extracción):
+
+- 🎯 **Helper de respuestas** (`responderOk`, `responderNotFound`, `responderError`…) para unificar el formato de las respuestas HTTP que hoy está copiado en **cada endpoint** de los controllers.
+- 🎯 **Helper de fechas**: sacar `calcularEdad` / `agregarEdad`, que hoy viven **adentro de `alumnos-service.js`**, a un helper reutilizable. Ese cálculo no es lógica de "alumnos": es una utilidad de fechas que mañana podrían usar otras entidades. Tu trabajo es **darte cuenta de que no pertenece al service** y mudarlo a `src/helpers/`.
 
 ---
 
@@ -61,10 +62,12 @@ Si lo hacés bien, deberías lograr que:
 
 ## 📦 Qué tenés que lograr
 
-1. Identificar **al menos 2 piezas** de código repetido extraíbles a helpers.
-2. Crear los helpers en `src/helpers/`.
-3. Reemplazar las repeticiones por llamadas al helper.
-4. Que los endpoints respondan **exactamente igual** que antes.
+Hacé **los dos helpers marcados con 🎯**:
+
+1. **`respuestas-helper.js`** — extraé el `res.status(...).send/json(...)` repetido en los controllers a funciones con nombre (`responderOk`, `responderNotFound`, `responderError`…) en `src/helpers/`.
+2. **`fechas-helper.js`** — sacá `calcularEdad` / `agregarEdad` de `alumnos-service.js` a `src/helpers/` y dejá que el service los **importe** en vez de definirlos adentro.
+3. Reemplazá las repeticiones por llamadas al helper (controllers y service).
+4. Que los endpoints respondan **exactamente igual** que antes: mismos status code, mismo body, y la **edad de cada alumno tiene que dar el mismo número**.
 
 ---
 
@@ -78,8 +81,6 @@ Si lo hacés bien, deberías lograr que:
 
 > Pedí **un helper a la vez**. Restricción clave: *"el helper tiene que ser una función pura / un módulo independiente, exportado con ES modules, y no debe cambiar la respuesta HTTP que ya devuelven los endpoints"*.
 
-> ⚠️ **Trampa**: un wrapper async de manejo de errores (tipo `asyncHandler`) es elegante pero cambia cómo fluyen los errores. Si lo metés, **probá los casos de error** (pedí un id que no existe, mandá un body roto). La IA te lo va a dar lindo pero puede tragarse un `status` distinto al original.
-
 > 💡 **Tip**: pedile a la IA que te diga **dónde poner el helper** y **cómo nombrarlo** según la convención del proyecto (mirá cómo está hecho `LogHelper`: clase con métodos estáticos vs. funciones sueltas). Coherencia > "lo más moderno".
 
 ---
@@ -89,7 +90,7 @@ Si lo hacés bien, deberías lograr que:
 - [ ] Los helpers están en `src/helpers/` y son `import`-ables (ES modules, no `require`).
 - [ ] Cada endpoint que usa el helper quedó **más corto** y se lee mejor.
 - [ ] Los **status codes no cambiaron**: probá happy path **y** casos de error (404, 400) en Postman.
-- [ ] Si extrajiste `calcularEdad`, el cálculo de edad de los alumnos sigue dando el mismo número.
+- [ ] `calcularEdad` / `agregarEdad` ya **no están definidos dentro de `alumnos-service.js`**: viven en `src/helpers/fechas-helper.js` y el service los importa. La edad de los alumnos sigue dando el mismo número.
 - [ ] El helper no quedó "atado" a una entidad puntual (es reutilizable por `cursos`, `materias`, etc.).
 
 > 🤔 Pregunta para el oral: *¿un helper de respuestas debería conocer los status codes, o se los deberías pasar el controller? ¿Por qué? ¿Dónde "vive" la decisión de devolver 404?*

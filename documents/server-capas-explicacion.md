@@ -11,28 +11,40 @@ Más abajo, además de las capas, se explica la clase `DbPg`, que concentra el *
 
 ## 🧩 ¿Qué son las capas y para qué sirven?
 
-Imaginá un local de comidas rápidas (tipo McDonald's):
+Imaginá un local de comidas rápidas (tipo McDonald's). Fijate que **no hay una sola persona haciendo todo**: hay un cajero, una cocina con varios especialistas, y un depósito con un encargado por rubro. Cada uno tiene **una sola responsabilidad** y solo habla con quien tiene al lado:
 
 ```
 CLIENTE (Postman / navegador)
+    │  "Quiero un Combo Big Mac"
+    ▼
+🧾 CAJERO (Controller)              → Toma el pedido, da el ticket, entrega la bandeja. NO cocina.
     │
     ▼
-🖥️ CAJERO (Controller)                    → Recibe el pedido, lo pasa a la cocina, entrega la bandeja
+👨‍🍳 COCINA (Services)               → Equipo de ESPECIALISTAS que arman el pedido con sus recetas y reglas
+    │   ├─ Especialista en hamburguesas        (AlumnosService)
+    │   ├─ Especialista en papas
+    │   └─ Especialista en bebidas             (CursosService)
+    │        ↑ cuando un pedido cruza especialidades, se piden cosas ENTRE ELLOS
+    ▼
+📦 DEPÓSITO (Repositories)          → Un ENCARGADO por rubro: sabe de qué estante sacar SU ingrediente
+    │   ├─ Encargado del depósito de carne y pan   (AlumnosRepository)
+    │   └─ Encargado del depósito de bebidas        (CursosRepository)
     │
     ▼
-👨‍🍳 COCINA (Service)                       → Sigue la receta, aplica las reglas, arma el pedido
-    │
+🛒 ESTANTERÍAS + MONTACARGAS (DbPg) → La maquinaria común que todos los encargados usan para entrar al depósito
     ▼
-📦 RESPONSABLE DEL DEPÓSITO (Repository)   → Sabe dónde están los ingredientes, los busca, los entrega
+🏭 PROVEEDOR (PostgreSQL)
 ```
 
-- El **cajero** no cocina — solo recibe el pedido del cliente, se lo pasa a la cocina, y cuando está listo lo entrega en la bandeja con el ticket. No sabe de recetas ni de ingredientes.
-- La **cocina** no atiende al público ni va al depósito a buscar cosas — sigue las recetas y aplica las reglas. "Un Big Mac es: dos medallones, salsa especial, lechuga, queso, pepinos, cebolla, pan con sésamo". Si no hay pan integral, no se puede armar el combo Veggie. Si el pedido es un combo, hay que agregar papas y bebida. La cocina le **pide** al responsable del depósito lo que necesita.
-- El **responsable del depósito** conoce exactamente dónde está cada cosa, cómo sacarla, cómo guardarla y cómo organizarla. No sabe de recetas ni de clientes — solo sabe buscar y entregar ingredientes cuando se los piden.
+- El **cajero** no cocina — solo recibe el pedido del cliente, se lo pasa a la cocina, y cuando está lista la bandeja la entrega con el ticket. No sabe de recetas ni de ingredientes.
+- La **cocina** no atiende al público ni va al depósito a buscar cosas. **No es una sola persona: es un equipo de especialistas**, cada uno experto en su producto, que sigue las recetas y aplica las reglas. "Un Big Mac es: dos medallones, salsa especial, lechuga, queso, pepinos, cebolla, pan con sésamo". Si no hay pan integral, no se puede armar el combo Veggie. Si el pedido es un combo, el especialista en hamburguesas le **pide** al de papas y al de bebidas que aporten su parte — no lo hace él. Y para los ingredientes, cada especialista le **pide** a su encargado de depósito.
+- El **depósito** también está dividido: hay **un encargado por rubro** (carne, bebidas...). Cada encargado conoce exactamente dónde está **su** ingrediente, cómo sacarlo y cómo guardarlo. No sabe de recetas ni de clientes — solo busca y entrega lo que le piden. Y ninguno se fabrica su propio montacargas: todos usan **la misma maquinaria compartida** para entrar al depósito.
 
-Si mañana cambiás de proveedor de ingredientes (de PostgreSQL a Supabase, por ejemplo), solo cambiás al responsable del depósito. La cocina y el cajero ni se enteran.
+Si mañana cambiás de proveedor de ingredientes (de PostgreSQL a Supabase, por ejemplo), solo cambiás lo que hay detrás del depósito. La cocina y el cajero ni se enteran.
 
 > 💡 **¿Por qué McDonald's y no un restaurante?** Porque en el fast food **todo está estandarizado**: pedidos fijos, recetas predecibles, ingredientes uniformes. Eso se parece más a una API: requests estandarizados, lógica predecible, datos uniformes.
+
+> 🧠 **Quedate con esto** (lo desarrollamos abajo): el **cajero** (controller) solo recibe y entrega; las **recetas y reglas** viven en los **especialistas de la cocina** (services); los **especialistas se piden cosas entre sí** (service → service); y cada **encargado de depósito** (repository) saca su ingrediente usando el **montacargas compartido** (`DbPg`).
 
 ---
 
@@ -45,12 +57,12 @@ src/
 │   ├── alumnos-controller.js      ← Cajero: recibe HTTP requests, responde con status codes
 │   └── cursos-controller.js
 ├── services/
-│   ├── alumnos-service.js         ← Cocina: lógica de negocio (validaciones, cálculos)
+│   ├── alumnos-service.js         ← Cocina: especialista en su entidad (reglas, validaciones, cálculos)
 │   └── cursos-service.js
 ├── repositories/
-│   ├── alumnos-repository.js      ← Responsable del depósito: SQL contra PostgreSQL
+│   ├── alumnos-repository.js      ← Encargado del depósito (por rubro): SQL contra PostgreSQL
 │   ├── cursos-repository.js
-│   └── db-pg.js                   ← Clase helper: Pool + try/catch + LogHelper
+│   └── db-pg.js                   ← Montacargas compartido: Pool + try/catch + LogHelper
 ├── entities/
 │   ├── alumno.js                  ← Clases de dominio (Alumno, Curso)
 │   └── curso.js
@@ -160,20 +172,36 @@ router.put('/:id', async (req, res) => {
 
 > 💡 **La regla**: el ID de la URL es la **fuente de verdad**. Si el body manda `PUT /api/alumnos/5` con `{ "id": 99 }`, ¿modificás el 5 o el 99? Devolvemos un **400** claro en vez de un bug silencioso.
 
+> 🔎 **Ojo a una inconsistencia a propósito**: acá el `PUT` hace `let id = parseInt(req.params.id)`, pero el `GET /:id` y el `DELETE /:id` usan `req.params.id` tal cual (string). El PUT necesita el número porque **compara el id en JavaScript** con el del body; el GET/DELETE solo se lo pasan a `pg` (que castea solo). Funciona, pero el criterio quedó disparejo y nadie valida que el `id` sea realmente numérico. **Eso se unifica en [`prompting/04 - Validaciones...`](../prompting/04%20-%20Validaciones%20y%20codigos%20de%20error.md)** extrayendo un helper que valida y convierte el `id` en un solo lugar.
+
 ---
 
 ### Service — la cocina
 
-El service es una **clase** que contiene la lógica de negocio: las reglas, validaciones, cálculos y transformaciones que no son ni "leer el request" ni "hacer una query".
+El service es una **clase** que contiene la lógica de negocio: las reglas, validaciones, cálculos y transformaciones que no son ni "leer el request" ni "hacer una query". **Acá es donde viven las recetas y las reglas.**
 
-Siguiendo con la analogía del McDonald's: la cocina no solo sigue recetas — también **llama a otros servicios** cuando lo necesita. Si el pedido es para delivery, la cocina arma la comida y le avisa al **servicio de delivery** que lo retire. Lo mismo en el código: después de crear un alumno, el service podría llamar a un `EmailService` para mandar un mail de bienvenida. El service **orquesta**: hace su trabajo y coordina con otros servicios.
+En la analogía, **la cocina no es una sola persona: es un equipo de especialistas**, cada uno experto en su producto:
+
+- El **especialista en hamburguesas** sabe la receta del Big Mac y sus reglas ("si no hay pan integral, no se puede armar el combo Veggie").
+- El **especialista en papas** sabe los tiempos de fritura.
+- El **especialista en bebidas** sabe la medida de cada vaso.
+
+Cada especialista es **un service**. En este proyecto: `AlumnosService` (especialista en alumnos) y `CursosService` (especialista en cursos). La "receta" y las "reglas" del especialista son, en el código, las **validaciones y los cálculos** (lo vemos enseguida con `calcularEdad` y `validarCursoExiste`).
+
+#### Un especialista le pide a otro: service → service
+
+Cuando llega un **Combo Big Mac**, el especialista en hamburguesas arma el Big Mac, pero el combo también lleva papas y bebida. En vez de hacerlo él (no es su especialidad, y no quiere meter mano donde no sabe), **le pide al especialista en papas y al de bebidas** que aporten su parte. Eso es **un service llamando a otro service**.
+
+En el código pasa lo mismo: para crear un alumno, `AlumnosService` necesita confirmar que el curso existe. En vez de meter mano en el depósito de cursos, **le pregunta al `CursosService`** (el especialista en cursos):
 
 ```
-AlumnosService (la cocina)
-    ├── AlumnosRepository        → "Dame los ingredientes" (buscar/guardar datos)
-    ├── CursosService            → "¿Existe este curso?" (consultar a otro servicio)
-    └── EmailService             → "Mandá el mail de bienvenida" (servicio de delivery)
+Combo Big Mac (pedido)                     POST /api/alumnos (crear un alumno)
+ └ Especialista en hamburguesas      =      AlumnosService
+     ├ le pide al esp. de bebidas    =       ├ le pregunta a CursosService: "¿existe el curso?"
+     └ le pide al depósito de carne   =       └ le pide a AlumnosRepository: "guardá el alumno"
 ```
+
+> 💡 **La regla de oro**: un especialista **nunca** entra al depósito de otro rubro. Si el de hamburguesas necesita una bebida, se la pide al especialista en bebidas — no va él al depósito de gaseosas. Por eso en el código `AlumnosService` usa `CursosService` (otro especialista) y **no** `CursosRepository` (el depósito de cursos) directamente: así **respeta las capas y las especialidades**.
 
 En este proyecto, `AlumnosService` hace dos cosas concretas que el repository no hace:
 
@@ -225,7 +253,7 @@ validarCursoExiste = async (idCurso) => {
 }
 ```
 
-Fijate algo clave: **`AlumnosService` usa `CursosService`** para verificar si el curso existe. No va directo al repository de cursos — respeta las capas. Esto es un **service llamando a otro service**.
+Fijate algo clave: **`AlumnosService` usa `CursosService`** para verificar si el curso existe. No va directo al repository de cursos — respeta las capas. Esto es un **service llamando a otro service**: el mismo "especialista en hamburguesas le pide al de bebidas" del combo, ahora en código.
 
 ```
 AlumnosController
@@ -248,9 +276,11 @@ Con service, la lógica vive en **un solo lugar** y cualquier endpoint que cree 
 
 ---
 
-### Repository — el responsable del depósito
+### Repository — el encargado del depósito (uno por rubro)
 
-El repository es una **clase** que ejecuta las queries SQL. Es el único que conoce las tablas. Pero **no toca el `Pool` de `pg` directamente** — delega en la clase `DbPg` (`this.db`):
+Así como la cocina tiene un especialista por producto, **el depósito tiene un encargado por rubro**: uno maneja el depósito de carne y pan, otro el de bebidas. Cada **encargado de depósito es un repository**: sabe exactamente de qué estante sacar **su** ingrediente y cómo guardarlo, pero no conoce recetas ni clientes. En el código: `AlumnosRepository` (depósito de alumnos) y `CursosRepository` (depósito de cursos).
+
+El repository es una **clase** que ejecuta las queries SQL. Es el único que conoce las tablas. Pero ojo con un detalle: **el encargado no se fabrica su propio montacargas**. Para entrar físicamente al depósito —sacar el ítem del estante y, si algo está roto, anotarlo— todos los encargados usan **la misma maquinaria compartida: la clase `DbPg`** (`this.db`). Por eso el repository **no toca el `Pool` de `pg` directamente**:
 
 ```js
 // alumnos-repository.js
@@ -273,11 +303,13 @@ export default class AlumnosRepository {
 }
 ```
 
-El repository queda reducido a **SQL + valores + llamar al método correcto de `DbPg`**. El `try/catch`, el `Pool` y el logueo viven en `DbPg` (ver la sección siguiente).
+El repository queda reducido a **qué estante (SQL) + qué valores + pedirle a la maquinaria (`DbPg`) que lo traiga**. El `try/catch`, el `Pool` y el logueo viven en `DbPg` (ver la sección siguiente) — el montacargas es **uno solo para todos los rubros**.
 
 ---
 
-## 🧰 La clase `DbPg` — encapsular el acceso a PostgreSQL
+## 🧰 La clase `DbPg` — el montacargas compartido del depósito
+
+> 🛒 En la analogía, `DbPg` es la **maquinaria que todos los encargados de depósito comparten** para entrar, sacar el ítem del estante y avisar si algo está roto. Ningún encargado (repository) se fabrica la suya: todos usan la misma.
 
 ### ¿Cuál es el problema?
 
